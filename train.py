@@ -14,7 +14,6 @@ from bahdanau_attention import BahdanauAttention
 from luong_attention import LuongAttention
 import eval
 
-
 class BuildModel():
 
     def __init__(self, config=None, train_sequence_tvsum=None, train_sequence_summe=None, test_dataset_tvsum=None, test_dataset_summe=None):
@@ -60,181 +59,6 @@ class BuildModel():
         self.acc_metric.update_state(y, logits)
         return loss_value
 
-    # Basic Encoder-Decoder with Encoder Outputs as Inputs at each timestep
-    @staticmethod
-    def encoder_decoder_1():
-        encoder_inputs = Input(shape=(320, 1024))
-
-        encoder_BidirectionalLSTM = Bidirectional(
-            LSTM(128, return_sequences=True, return_state=True))
-        encoder_outputs, fh, fc, bh, bc = encoder_BidirectionalLSTM(
-            encoder_inputs)
-        ch = Concatenate()([fh, bh])
-        cc = Concatenate()([fc, bc])
-        encoder_states = [ch, cc]
-
-        decoder_LSTM = LSTM(256, return_sequences=True)
-        decoder_outputs = decoder_LSTM(
-            encoder_outputs, initial_state=encoder_states)
-
-        dense = TimeDistributed(Dense(1, activation='sigmoid'))
-        decoder_outputs = dense(decoder_outputs)
-
-        model = Model(encoder_inputs, decoder_outputs)
-        return model
-
-    # Encoder-Decoder with Decoder Outputs being fed as inputs for the next timestep
-    @staticmethod
-    def encoder_decoder_2():
-        encoder_inputs = Input(shape=(320, 1024))
-
-        encoder_BidirectionalLSTM = Bidirectional(LSTM(128, return_state=True))
-        encoder_outputs, fh, fc, bh, bc = encoder_BidirectionalLSTM(
-            encoder_inputs)
-        ch = Concatenate()([fh, bh])
-        cc = Concatenate()([fc, bc])
-        encoder_states = [ch, cc]
-
-        decoder_inputs = Input(shape=(1, 1))
-
-        decoder_LSTM = LSTM(256, return_sequences=True, return_state=True)
-        decoder_dense = Dense(1, activation='sigmoid')
-
-        all_outputs = []
-
-        inputs = decoder_inputs
-        states = encoder_states
-        for _ in range(320):
-            outputs, sh, sc = decoder_LSTM(inputs, initial_state=states)
-            outputs = decoder_dense(outputs)
-            all_outputs.append(outputs)
-            inputs = outputs
-            states = [sh, sc]
-
-        decoder_outputs = Lambda(
-            lambda x: K.concatenate(x, axis=1))(all_outputs)
-
-        train_model = Model([encoder_inputs, decoder_inputs], decoder_outputs)
-
-        infenc_model = Model(encoder_inputs, encoder_states)
-
-        decoder_state_input_h = Input(shape=(256, ))
-        decoder_state_input_c = Input(shape=(256, ))
-        decoder_states_inputs = [decoder_state_input_h, decoder_state_input_c]
-        decoder_outputs, state_h, state_c = decoder_LSTM(
-            decoder_inputs, initial_state=decoder_states_inputs)
-        decoder_states = [state_h, state_c]
-        decoder_outputs = decoder_dense(decoder_outputs)
-
-        infdec_model = Model(
-            [decoder_inputs] + decoder_states_inputs, [decoder_outputs] + decoder_states)
-        return train_model, infenc_model, infdec_model
-
-    # teacher-forcing
-    @staticmethod
-    def encoder_decoder_3():
-        encoder_inputs = Input(shape=(320, 1024))
-
-        encoder_BidirectionalLSTM = Bidirectional(LSTM(128, return_state=True))
-        encoder_outputs, fh, fc, bh, bc = encoder_BidirectionalLSTM(
-            encoder_inputs)
-        ch = Concatenate()([fh, bh])
-        cc = Concatenate()([fc, bc])
-        encoder_states = [ch, cc]
-
-        decoder_inputs = Input(shape=(None, 1))
-
-        decoder_LSTM = LSTM(256, return_sequences=True, return_state=True)
-        decoder_outputs, _, _ = decoder_LSTM(
-            decoder_inputs, initial_state=encoder_states)
-
-        decoder_dense = Dense(1, activation='sigmoid')
-        decoder_outputs = decoder_dense(decoder_outputs)
-
-        train_model = Model([encoder_inputs, decoder_inputs], decoder_outputs)
-
-        infenc_model = Model(encoder_inputs, encoder_states)
-
-        decoder_state_input_h = Input(shape=(256, ))
-        decoder_state_input_c = Input(shape=(256, ))
-        decoder_states_inputs = [decoder_state_input_h, decoder_state_input_c]
-        decoder_outputs, sh, sc = decoder_LSTM(
-            decoder_inputs, initial_state=decoder_states_inputs)
-        decoder_states = [sh, sc]
-        decoder_outputs = decoder_dense(decoder_outputs)
-
-        infdec_model = Model(
-            [decoder_inputs] + decoder_states_inputs, [decoder_outputs] + decoder_states)
-        return train_model, infenc_model, infdec_model
-
-    # Attentive Encoder-Decoder (Bahdanau)
-    @staticmethod
-    def encoder_decoder_4():
-        encoder_inputs = Input(shape=(320, 1024))
-
-        encoder_BidirectionalLSTM = Bidirectional(
-            LSTM(128, return_sequences=True, return_state=True))
-        encoder_outputs, fh, fc, bh, bc = encoder_BidirectionalLSTM(
-            encoder_inputs)
-        ch = Concatenate()([fh, bh])
-        cc = Concatenate()([fc, bc])
-        encoder_states = [ch, cc]
-
-        attention = BahdanauAttention(256)
-
-        decoder_inputs = Input(shape=(1, 1))
-        decoder_LSTM = LSTM(256, return_sequences=True,
-                            return_state=True, name="here")
-        decoder_dense = Dense(1, activation='sigmoid')
-
-        all_outputs = []
-
-        inputs = decoder_inputs
-        decoder_outputs = tf.expand_dims(ch, 1)
-        states = encoder_states
-
-        for _ in range(320):
-            context_vector, attention_weights = attention(
-                decoder_outputs, encoder_outputs)
-            inputs = tf.concat([context_vector, inputs], axis=-1)
-            decoder_outputs, sh, sc = decoder_LSTM(
-                inputs, initial_state=states)
-            outputs = decoder_dense(decoder_outputs)
-            all_outputs.append(outputs)
-
-            inputs = outputs
-            states = [sh, sc]
-
-        decoder_outputs = Lambda(
-            lambda x: K.concatenate(x, axis=1))(all_outputs)
-
-        train_model = Model([encoder_inputs, decoder_inputs], decoder_outputs)
-
-        infenc_model = Model(
-            encoder_inputs, [encoder_outputs] + encoder_states)
-
-        attention_inputs_1 = Input(shape=(1, 256,))
-        attention_inputs_2 = Input(shape=(320, 256,))
-        cv, aw = attention(query=attention_inputs_1, value=attention_inputs_2)
-        attention_outputs = [cv, aw]
-
-        attention_model = Model(
-            [attention_inputs_1, attention_inputs_2], attention_outputs)
-
-        decoder_inputs_inference = Input(shape=(1, (1 + 256)))
-        decoder_state_input_h = Input(shape=(256, ))
-        decoder_state_input_c = Input(shape=(256, ))
-        decoder_states_inputs = [decoder_state_input_h, decoder_state_input_c]
-        decoder_outputs, sh, sc = decoder_LSTM(
-            decoder_inputs_inference, initial_state=decoder_states_inputs)
-        decoder_states = [sh, sc]
-        decoder_dense_outputs = decoder_dense(decoder_outputs)
-
-        infdec_model = Model([decoder_inputs_inference] + decoder_states_inputs,
-                             [decoder_outputs, decoder_dense_outputs] + decoder_states)
-
-        return train_model, infenc_model, attention_model, infdec_model
-
     # Attentive Encoder-Decoder (Luong)
     @staticmethod
     def encoder_decoder_5():
@@ -265,8 +89,8 @@ class BuildModel():
                 inputs, initial_state=states)
             context_vector, attention_weights = attention(
                 query=decoder_outputs, value=encoder_outputs)
-            context_and_decoder_outputs = tf.concat(
-                [context_vector, decoder_outputs], axis=-1)
+            context_and_decoder_outputs = tf.keras.layers.Concatenate()(
+                [context_vector, decoder_outputs])
             attention_vector = attention_dense(context_and_decoder_outputs)
             outputs = decoder_dense(attention_vector)
             all_outputs.append(outputs)
@@ -282,8 +106,8 @@ class BuildModel():
         infenc_model = Model(
             encoder_inputs, [encoder_outputs] + encoder_states)
 
-        decoder_state_input_h = Input(shape=(256, ))
-        decoder_state_input_c = Input(shape=(256, ))
+        decoder_state_input_h = Input(shape=(256,))
+        decoder_state_input_c = Input(shape=(256,))
         decoder_states_inputs = [decoder_state_input_h, decoder_state_input_c]
         decoder_outputs, sh, sc = decoder_LSTM(
             decoder_inputs, initial_state=decoder_states_inputs)
@@ -310,51 +134,10 @@ class BuildModel():
         return train_model, infenc_model, infdec_model, attention_model, decoder_dense_model
 
     @tf.function
-    def predict_fn_1(self, features):
-        state = self.infenc_model(features)
-        target_sequence = np.array([2], dtype="float32").reshape(1, 1, 1)
-        # output = []
-        output = tf.TensorArray(tf.float32, size=1, dynamic_size=True)
-        for t in tf.range(320):
-            decoder_output, sh, sc = self.infdec_model(
-                [target_sequence] + state)
-            # output.append(decoder_output[0, 0, :])
-            output = output.write(t, decoder_output[0, 0, :])
-
-            state = [sh, sc]
-            target_seqeunce = decoder_output
-
-        # return np.array(output)
-        return output.stack()
-
-    @tf.function
-    def predict_fn_2(self, features):
-        encoder_outputs, sh, sc = self.infenc_model(features)
-        decoder_outputs = tf.expand_dims(sh, 1)
-        target_sequence = np.array([2], dtype="float32").reshape(1, 1, 1)
-        states = [sh, sc]
-        # output = []
-        output = tf.TensorArray(tf.float32, size=1, dynamic_size=True)
-        for t in tf.range(320):
-            cv, aw = self.attention_model([decoder_outputs, encoder_outputs])
-            target_sequence = tf.concat([cv, target_sequence], axis=-1)
-            decoder_outputs, decoder_dense_outputs, sh, sc = self.infdec_model(
-                [target_sequence] + states)
-            # output.append(decoder_dense_outputs[0, 0, :])
-            output = output.write(t, decoder_dense_outputs[0, 0, :])
-
-            states = [sh, sc]
-            target_sequence = decoder_dense_outputs
-
-        # return np.array(output)
-        return output.stack()
-
-    @tf.function
     def predict_fn_3(self, features):
         encoder_outputs, sh, sc = self.infenc_model(features)
         target_sequence = np.array([2], dtype="float32").reshape(1, 1, 1)
         states = [sh, sc]
-        # output = []
         output = tf.TensorArray(tf.float32, size=1, dynamic_size=True)
         for t in tf.range(320):
             decoder_outputs, sh, sc = self.infdec_model(
@@ -364,40 +147,18 @@ class BuildModel():
             context_and_decoder_outputs = tf.concat(
                 [context_vector, decoder_outputs], axis=-1)
             outputs = self.decoder_dense_model(context_and_decoder_outputs)
-            # output.append(outputs[0, 0, :])
             output = output.write(t, outputs[0, 0, :])
 
             target_sequence = outputs
             states = [sh, sc]
 
-        # return np.array(output)
         return output.stack()
 
     def train(self):
-        # self.train_model = self.encoder_decoder_1()
-        # self.train_model, self.infenc_model, self.infdec_model = self.encoder_decoder_2()
-        # self.train_model, self.infenc_model, self.infdec_model = self.encoder_decoder_3()
-        # self.train_model, self.infenc_model, self.attention_model, self.infdec_model = self.encoder_decoder_4()
         self.train_model, self.infenc_model, self.infdec_model, self.attention_model, self.decoder_dense_model = self.encoder_decoder_5()
 
         t = trange(self.config.n_epochs, desc='Epoch', ncols=90)
         for epoch_i in t:
-
-            """for model - 1"""
-            # for batch_i, (feature, label) in enumerate(tqdm(self.train_sequence_tvsum, desc = "Batch_TVSum", ncols = 80, leave = False)):
-            #   loss_value = self.train_step(feature, label)
-
-            # for batch_i, (feature, label) in enumerate(tqdm(self.train_sequence_summe, desc = "Batch_Summe", ncols = 80, leave = False)):
-            #     loss_value = self.train_step(feature, label)
-
-            """for model - 3"""
-            # for batch_i, ([feature, shifted_label], label) in enumerate(tqdm(self.train_sequence_tvsum, desc = "Batch_TVSum", ncols = 80, leave = False)):
-            #   loss_value = self.train_step([feature, shifted_label], label)
-
-            # for batch_i, ([feature, shifted_label], label) in enumerate(tqdm(self.train_sequence_summe, desc = "Batch_Summe", ncols = 80, leave = False)):
-            #     loss_value = self.train_step([feature, shifted_label], label)
-
-            """for model - 2, 4, 5"""
 
             for batch_i, ([feature, sdata], label) in enumerate(tqdm(self.train_sequence_tvsum, desc="Batch_TVSum", ncols=80, leave=False)):
                 loss_value = self.train_step([feature, sdata], label)
@@ -414,7 +175,7 @@ class BuildModel():
             tqdm.write("Save parameters at {}".format(ckpt_path))
             self.train_model.save_weights(ckpt_path)
             self.evaluate('tvsum', epoch_i)
-            # self.evaluate('summe', epoch_i)
+            #self.evaluate('summe', epoch_i)
 
     def evaluate(self, dataset, epoch_i):
 
@@ -437,14 +198,6 @@ class BuildModel():
 
         with h5py.File(data_path) as data_file:
             for feature, label, index in tqdm(test_dataset, desc='Evaluate', ncols=90, leave=False):
-
-                """enocder-decoder - 1"""
-                # pred_score = self.train_model.predict(feature.reshape(-1,320,1024))[0]
-                """encoder-decoder - 2, 3"""
-                # pred_score = self.predict_fn_1(feature.reshape(-1,320,1024))
-                """encoder-decoder - 4"""
-                # pred_score = self.predict_fn_2(feature.reshape(-1,320,1024))
-                """encoder-decoder - 5"""
                 pred_score = self.predict_fn_3(feature.reshape(-1, 320, 1024))
 
                 video_info = data_file['video_'+str(index)]
@@ -488,3 +241,5 @@ if __name__ == '__main__':
     builder = BuildModel(train_config, train_sequence_tvsum,
                          train_sequence_summe, test_dataset_tvsum, test_dataset_summe)
     builder.train()
+
+    
